@@ -11,18 +11,17 @@ from neonize.client import NewClient
 from neonize.events import ConnectedEv, MessageEv, event
 from neonize.utils import build_jid
 
-# --- 1. FAKE WEB SERVER (Must start FIRST for Render) ---
+# --- 1. FAKE WEB SERVER ---
 def run_fake_server():
     PORT = int(os.environ.get("PORT", 10000))
     Handler = http.server.SimpleHTTPRequestHandler
     try:
         with socketserver.TCPServer(("", PORT), Handler) as httpd:
-            print(f"🌐 Fake Web Server running on port {PORT} to keep Render alive")
+            print(f"🌐 Fake Web Server running on port {PORT}")
             httpd.serve_forever()
     except Exception as e:
-        print(f"⚠️ Web server notice: {e}")
+        print(f"⚠️ Web server error: {e}")
 
-# Start the fake server immediately in the background
 threading.Thread(target=run_fake_server, daemon=True).start()
 
 # --- 2. GOOGLE CONFIGURATION ---
@@ -33,19 +32,8 @@ def get_google_service():
     creds = None
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    
     if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception:
-                creds = None
-        
-        if not creds:
-            # NOTE: run_local_server will fail on Render because it is a headless cloud environment.
-            # For a permanent cloud fix, a Google Cloud Service Account (.json key) is required.
-            raise RuntimeError("Google credentials expired or missing token.json. Cloud server cannot open a browser auth window.")
-
+        raise RuntimeError("Google auth failed: missing or expired token.json")
     return build('people', 'v1', credentials=creds)
 
 def save_to_google_contacts(phone_number, first_name="Gain", last_name="Contact"):
@@ -57,10 +45,9 @@ def save_to_google_contacts(phone_number, first_name="Gain", last_name="Contact"
                 "phoneNumbers": [{"value": phone_number, "type": "mobile"}]
             }
         ).execute()
-        print(f"🟩 [Google] Successfully saved {first_name} ({phone_number})")
         return True
     except Exception as e:
-        print(f"🟥 [Google Error] Could not save contact on cloud: {e}")
+        print(f"🟥 [Google Error]: {e}")
         return False
 
 # --- 3. WHATSAPP BOT ENGINE ---
@@ -68,42 +55,29 @@ client = NewClient("whatsapp_session.sqlite3")
 
 @client.event(ConnectedEv)
 def on_connected(_: NewClient, __: ConnectedEv):
-    print("⚡ WhatsApp Client Connected Successfully!")
+    print("⚡ WhatsApp Client Connected!")
 
 @client.event(MessageEv)
 def on_message(client: NewClient, message: MessageEv):
-    sender_jid = message.Info.MessageSource.Sender
-    sender_phone = sender_jid.User
+    sender_phone = message.Info.MessageSource.Sender.User
+    msg_text = (message.Message.conversation or 
+                (message.Message.extendedTextMessage and message.Message.extendedTextMessage.text) or "")
     
-    msg_text = ""
-    if message.Message.conversation:
-        msg_text = message.Message.conversation
-    elif message.Message.extendedTextMessage and message.Message.extendedTextMessage.text:
-        msg_text = message.Message.extendedTextMessage.text
-        
-    msg_text = msg_text.strip()
-    is_from_me = message.Info.MessageSource.IsFromMe
-    
-    if is_from_me:
-        # --- COMMANDS ---
-        if msg_text.startswith(".status "):
-            status_content = msg_text.replace(".status ", "")
-            status_jid = build_jid("status@broadcast")
-            client.send_message(status_jid, text=status_content)
-            print(f"📢 Status updated to: {status_content}")
-            
-        elif msg_text == ".info":
-            chat_jid = message.Info.MessageSource.Chat
-            client.send_message(chat_jid, text="🤖 Bot Status: Active\nPlatform: 100% Free Cloud")
+    if message.Info.MessageSource.IsFromMe:
+        if msg_text.startswith(".info"):
+            client.send_message(message.Info.MessageSource.Chat, text="🤖 Bot Active")
         return
 
-    # --- AUTO CONTACT-GAIN ---
-    if msg_text:
-        print(f"📥 New message from {sender_phone}: {msg_text}")
-        save_to_google_contacts(phone_number=sender_phone, first_name="Gain", last_name=sender_phone[-4:])
+    if msg_text.strip():
+        save_to_google_contacts(sender_phone, "Gain", sender_phone[-4:])
 
 # --- 4. START UP ---
 if __name__ == "__main__":
-    print("🚀 Booting up the WhatsApp Cloud Engine...")
+    print("🚀 Booting up...")
+    if not os.path.exists("whatsapp_session.sqlite3"):
+        print("🔍 No session found. Preparing to generate QR code...")
+    else:
+        print("📂 Found existing session. Connecting...")
+    
     client.connect()
     event.wait()
