@@ -1,23 +1,49 @@
 import os
+import os.path
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 from neonize.client import NewClient
 from neonize.events import ConnectedEv, MessageEv, event
 from neonize.utils import build_jid
 
-# --- 1. GOOGLE CONTACTS LOGIC (From our previous step) ---
-def save_to_google_contacts(phone_number, name="VCF Contact"):
-    """
-    Connects to Google People API and saves the contact automatically.
-    """
+# --- 1. GOOGLE CONFIGURATION ---
+SCOPES = ['https://www.googleapis.com/auth/contacts']
+SECRET_FILE = 'client_secret_842710013211-37ha8jgkg0p3hdof8hj7ktmjlkc7sti6.apps.googleusercontent.com.json'
+
+def get_google_service():
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(SECRET_FILE, SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+
+    return build('people', 'v1', credentials=creds)
+
+def save_to_google_contacts(phone_number, first_name="Gain", last_name="Contact"):
     try:
-        # Placeholder for your Google token/credentials injection
-        print(f"[Google] Successfully saved {name} ({phone_number}) to your account!")
+        service = get_google_service()
+        service.people().createContact(
+            body={
+                "names": [{"givenName": first_name, "familyName": last_name}],
+                "phoneNumbers": [{"value": phone_number, "type": "mobile"}]
+            }
+        ).execute()
+        print(f"🟩 [Google] Successfully saved {first_name} ({phone_number})")
         return True
     except Exception as e:
-        print(f"[Google Error] Failed to save contact: {e}")
+        print(f"🟥 [Google Error] Failed to save contact: {e}")
         return False
 
 # --- 2. WHATSAPP BOT ENGINE ---
-# Initialize the client (saves session files locally so you only scan QR code once)
 client = NewClient("whatsapp_session.sqlite3")
 
 @client.event(ConnectedEv)
@@ -26,11 +52,9 @@ def on_connected(_: NewClient, __: ConnectedEv):
 
 @client.event(MessageEv)
 def on_message(client: NewClient, message: MessageEv):
-    # Extract sender phone number and message text safely
     sender_jid = message.Info.MessageSource.Sender
     sender_phone = sender_jid.User
     
-    # Handle both normal texts and extended text messages
     msg_text = ""
     if message.Message.conversation:
         msg_text = message.Message.conversation
@@ -38,37 +62,29 @@ def on_message(client: NewClient, message: MessageEv):
         msg_text = message.Message.extendedTextMessage.text
         
     msg_text = msg_text.strip()
-    
-    # Ignore messages sent by the bot itself to prevent infinite loops
     is_from_me = message.Info.MessageSource.IsFromMe
     
     if is_from_me:
-        # --- 3. COMMANDS IN YOUR PERSONAL CHAT ---
-        # Since you want to control it from your own phone, it listens to your outgoing texts
+        # --- 3. PERSONAL CHAT COMMANDS ---
         if msg_text.startswith(".status "):
             status_content = msg_text.replace(".status ", "")
-            # Target 'status@broadcast' to post a status update programmatically
             status_jid = build_jid("status@broadcast")
             client.send_message(status_jid, text=status_content)
-            print(f"📢 Status updated successfully to: {status_content}")
+            print(f"📢 Status updated to: {status_content}")
             
         elif msg_text == ".info":
             chat_jid = message.Info.MessageSource.Chat
             client.send_message(chat_jid, text="🤖 Bot Status: Active\nPlatform: 100% Free Cloud")
-            
         return
 
-    # --- 4. AUTO CONTACT-GAIN LOGIC FOR INCOMING CHATS ---
+    # --- 4. AUTO CONTACT-GAIN ---
     if msg_text:
         print(f"📥 New message from {sender_phone}: {msg_text}")
-        
-        # Trigger your Google Contact function automatically
-        # It takes the phone number and saves it securely
-        save_to_google_contacts(phone_number=sender_phone, name=f"Gain {sender_phone[-4:]}")
+        # Automatically saves incoming numbers as "Gain [Last 4 Digits]"
+        save_to_google_contacts(phone_number=sender_phone, first_name="Gain", last_name=sender_phone[-4:])
 
-# --- 5. START UP THE ENGINE ---
+# --- 5. START UP ---
 if __name__ == "__main__":
     print("🚀 Booting up the WhatsApp Cloud Engine...")
     client.connect()
-    # Keep the program running persistently in the background
     event.wait()
