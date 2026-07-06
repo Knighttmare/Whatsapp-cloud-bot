@@ -1,0 +1,47 @@
+import os
+import os.path
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+
+# If modifying these scopes, delete the file token.json.
+SCOPES = ['https://www.googleapis.com/auth/contacts']
+
+def get_google_service():
+    creds = None
+    # token.json stores the user's access and refresh tokens
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    
+    # If there are no valid credentials available, let the user log in.
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            # Look for the credentials file you uploaded
+            # Note: Ensure your uploaded file is renamed to 'credentials.json' or change this name
+            flow = InstalledAppFlow.from_client_secrets_file(
+                'credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        # Save the credentials for the next run
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+
+    return build('people', 'v1', credentials=creds)
+
+def add_contact(service, first_name, last_name, phone_number):
+    try:
+        service.people().createContact(
+            body={
+                "names": [{"givenName": first_name, "familyName": last_name}],
+                "phoneNumbers": [{"value": phone_number, "type": "mobile"}]
+            }
+        ).execute()
+        print(f"Successfully added {first_name} {last_name}")
+    except Exception as e:
+        print(f"Error saving contact: {e}")
+
+if __name__ == '__main__':
+    print("Google Contacts setup successful!")
+    # service = get_google_service()
