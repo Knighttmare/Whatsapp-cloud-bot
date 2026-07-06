@@ -88,3 +88,16 @@ if __name__ == "__main__":
     print("🚀 Booting up the WhatsApp Cloud Engine...")
     client.connect()
     event.wait()
+import http.server
+import socketserver
+import threading
+import os
+
+def run_fake_server():
+    PORT = int(os.environ.get("PORT", 10000))
+    Handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", PORT), Handler) as httpd:
+        httpd.serve_forever()
+
+# Start the fake server in the background so Render is happy
+threading.Thread(target=run_fake_server, daemon=True).start()
